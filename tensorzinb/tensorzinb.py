@@ -63,33 +63,39 @@ def _is_sparse_like(x):
         pass
     return False
 
+import scipy.sparse as sp
+import pandas as pd
 def _to_tf_sparse(x):
     """
-    Convert a scipy CSR/COO or pandas SparseDataFrame to a tf.SparseTensor (float32 values).
+    Convert a scipy CSR/COO or pandas SparseDtype DataFrame to a tf.SparseTensor (float32 values).
+    This function is intentionally strict and will raise informative errors on misuse.
     """
-    import numpy as _np
-    try:
-        import scipy.sparse as sp
-    except Exception as _e:
-        sp = None
+    # pandas SparseDtype DataFrame -> scipy.sparse CSR
+    if isinstance(x, pd.DataFrame):
+        dtypes = list(getattr(x, "dtypes", []))
+        is_pandas_sparse = any(isinstance(dt, pd.SparseDtype) for dt in dtypes)
+        if not is_pandas_sparse:
+            raise TypeError(
+                "pandas DataFrame provided but columns are not SparseDtype. "
+                f"First few dtypes: {dtypes[:5]}"
+            )
+        sp_coo = x.sparse.to_coo()
+        # Ensure float32 values for TF
+        sp_coo = sp_coo.astype(np.float32, copy=False)
+        x = sp_coo.tocsr()
 
-    # pandas sparse -> scipy.sparse
-    try:
-        import pandas as pd
-        if isinstance(x, pd.DataFrame):
-            # Ensure coo -> csr for efficient slicing; values as float32
-            x = x.sparse.to_coo().tocsr()
-    except Exception:
-        pass
-
-    if sp is not None and sp.issparse(x):
+    # At this point, accept only scipy.sparse matrices
+    if sp.issparse(x):
         coo = x.tocoo()
-        indices = _np.stack([coo.row, coo.col], axis=1).astype(_np.int64)
-        values = coo.data.astype(_np.float32, copy=False)
-        shape = _np.array(coo.shape, dtype=_np.int64)
+        indices = np.stack([coo.row, coo.col], axis=1).astype(np.int64)
+        values = coo.data.astype(np.float32, copy=False)
+        shape = np.array(coo.shape, dtype=np.int64)
         return tf.SparseTensor(indices=indices, values=values, dense_shape=shape)
 
-    raise TypeError("Expected scipy.sparse matrix or pandas SparseDataFrame.")
+    raise TypeError(
+        "Expected scipy.sparse matrix or pandas SparseDataFrame; "
+        f"got type={type(x)}."
+    )
 
 class SparseDense(tf.keras.layers.Layer):
     """
@@ -123,7 +129,6 @@ class SparseDense(tf.keras.layers.Layer):
         if self.bias is not None:
             y = tf.nn.bias_add(y, self.bias)
         return y
-# ---- end sparse support ----
 
 # Reset Keras Session
 def reset_keras():
@@ -358,6 +363,17 @@ class TensorZINB:
         else:
             use_sparse_nb = bool(sparse_nb)
 
+        # If sparse was requested/detected but exog isn't actually sparse-like, fall back to dense.
+        if use_sparse_nb:
+            try:
+                import scipy.sparse as _sp
+            except Exception:
+                _sp = None
+            is_sparseish = _is_sparse_like(self.exog) or (_sp is not None and _sp.issparse(self.exog))
+            if not is_sparseish:
+                warnings.warn("sparse_nb=True but exog is not sparse-like; falling back to dense.")
+                use_sparse_nb = False
+
         # initiate weights
         if len(init_weights) == 0:
             if init_method == "poi":
@@ -492,6 +508,8 @@ class TensorZINB:
             # TODO: FIX this. code randomly crashes on apple silicon M1/M2 with 
             # error `Incompatible shapes`. code usually runs fine after second try.
             # similar to this issue https://developer.apple.com/forums/thread/701985
+            cpu_time = float('nan')
+            losses = None
             for i in range(10):
                 try:
                     start_time = time.time()
@@ -558,6 +576,13 @@ class TensorZINB:
 
             weights_dict = dict(zip(weight_names, weights))
 
+            epochs_trained = 0
+            loss_hist = None
+            if (losses is not None) and hasattr(losses, "history") and isinstance(losses.history, dict):
+                if "loss" in losses.history:
+                    loss_hist = losses.history["loss"]
+                    epochs_trained = len(loss_hist)
+
             res = {
                 "llf_total": llf,
                 "llfs": llfs,
@@ -568,11 +593,11 @@ class TensorZINB:
                 "weights": weights_dict,
                 "cpu_time": cpu_time,
                 "num_sample": num_sample,
-                "epochs": len(losses.history["loss"]),
+                "epochs": epochs_trained,
             }
 
-            if return_history:
-                res["loss_history"] = losses.history["loss"]
+            if return_history and loss_hist is not None:
+                res["loss_history"] = loss_hist
                 res["weights_history"] = np.array(get_weights.weights)
 
         return res
