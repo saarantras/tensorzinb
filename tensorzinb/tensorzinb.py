@@ -40,7 +40,90 @@ def import_tensorflow():
     return tf
 
 
+
 tf = import_tensorflow()
+
+# ---- Sparse support utilities (backward compatible) ----
+def _is_sparse_like(x):
+    """Return True if x is a scipy.sparse matrix or a pandas.DataFrame with SparseDtype columns."""
+    try:
+        import scipy.sparse as sp
+        if sp.issparse(x):
+            return True
+    except Exception:
+        pass
+    try:
+        import pandas as pd
+        if isinstance(x, pd.DataFrame):
+            # Any SparseDtype present?
+            for dt in x.dtypes:
+                if "Sparse" in str(dt):
+                    return True
+    except Exception:
+        pass
+    return False
+
+def _to_tf_sparse(x):
+    """
+    Convert a scipy CSR/COO or pandas SparseDataFrame to a tf.SparseTensor (float32 values).
+    """
+    import numpy as _np
+    try:
+        import scipy.sparse as sp
+    except Exception as _e:
+        sp = None
+
+    # pandas sparse -> scipy.sparse
+    try:
+        import pandas as pd
+        if isinstance(x, pd.DataFrame):
+            # Ensure coo -> csr for efficient slicing; values as float32
+            x = x.sparse.to_coo().tocsr()
+    except Exception:
+        pass
+
+    if sp is not None and sp.issparse(x):
+        coo = x.tocoo()
+        indices = _np.stack([coo.row, coo.col], axis=1).astype(_np.int64)
+        values = coo.data.astype(_np.float32, copy=False)
+        shape = _np.array(coo.shape, dtype=_np.int64)
+        return tf.SparseTensor(indices=indices, values=values, dense_shape=shape)
+
+    raise TypeError("Expected scipy.sparse matrix or pandas SparseDataFrame.")
+
+class SparseDense(tf.keras.layers.Layer):
+    """
+    Linear layer that supports both dense and tf.SparseTensor inputs.
+    Used only when the NB design matrix is sparse; otherwise the regular Dense is used.
+    """
+    def __init__(self, units, use_bias=False, name=None, kernel_init="glorot_uniform"):
+        super().__init__(name=name)
+        self.units = units
+        self.use_bias = use_bias
+        self.kernel_init = tf.keras.initializers.get(kernel_init)
+
+    def build(self, input_shape):
+        in_dim = int(input_shape[-1])
+        self.kernel = self.add_weight(
+            name="kernel", shape=(in_dim, self.units),
+            initializer=self.kernel_init, trainable=True
+        )
+        if self.use_bias:
+            self.bias = self.add_weight(
+                name="bias", shape=(self.units,), initializer="zeros", trainable=True
+            )
+        else:
+            self.bias = None
+
+    def call(self, x):
+        if isinstance(x, tf.SparseTensor):
+            y = tf.sparse.sparse_dense_matmul(x, self.kernel)
+        else:
+            y = tf.linalg.matmul(x, self.kernel)
+        if self.bias is not None:
+            y = tf.nn.bias_add(y, self.bias)
+        return y
+# ---- end sparse support ----
 
 # Reset Keras Session
 def reset_keras():
@@ -164,7 +247,15 @@ class TensorZINB:
         df_model_c = 0
 
         self.exog = exog
-        df_model = np.linalg.matrix_rank(exog)
+        # matrix_rank can densify/hang on sparse inputs; fall back safely
+        try:
+            import scipy.sparse as _sp
+            if _is_sparse_like(exog) or (_sp.issparse(exog) if 'scipy' in globals() else False):
+                df_model = exog.shape[1]
+            else:
+                df_model = np.linalg.matrix_rank(exog)
+        except Exception:
+            df_model = exog.shape[1]
         if len(exog.shape) == 1:
             self.k_exog = 1
             self.exog = exog.reshape((-1, 1))
@@ -246,6 +337,7 @@ class TensorZINB:
         patience_reduce_lr=10,
         min_lr=0.001,
         reset_keras_session=False,
+        sparse_nb="auto",
         **kwargs,
     ):
         if device_name is None:
@@ -259,6 +351,12 @@ class TensorZINB:
         num_feat_c = self.k_exog_c
         num_feat_infl_c = self.k_exog_infl_c
         num_dispersion = self.k_disperson
+
+        # Decide whether to use sparse path for NB design matrix
+        if sparse_nb == "auto":
+            use_sparse_nb = _is_sparse_like(self.exog)
+        else:
+            use_sparse_nb = bool(sparse_nb)
 
         # initiate weights
         if len(init_weights) == 0:
@@ -279,16 +377,25 @@ class TensorZINB:
         with tf.device(device_name):
             disable_eager_execution()
 
-            inputs = Input(shape=(num_feat,))
-            inputs_infl = Input(shape=(num_feat_infl,))
-            inputs_c = Input(shape=(num_feat_c,))
-            inputs_infl_c = Input(shape=(num_feat_infl_c,))
-            inputs_theta = Input(shape=(1,))
+            # NB input may be sparse depending on detection/flag
+            inputs = Input(shape=(num_feat,), dtype=tf.float32, sparse=use_sparse_nb, name="nb_in")
+            inputs_infl   = Input(shape=(num_feat_infl,),   dtype=tf.float32, name="zi_in")
+            inputs_c      = Input(shape=(num_feat_c,),      dtype=tf.float32, name="nb_c_in")
+            inputs_infl_c = Input(shape=(num_feat_infl_c,), dtype=tf.float32, name="zi_c_in")
+            inputs_theta  = Input(shape=(1,),               dtype=tf.float32, name="theta_in")
 
-            if 'x_mu' in init_weights:
-                x = Dense(num_out, use_bias=False, name='x_mu', weights=[init_weights['x_mu']])(inputs)
+            if use_sparse_nb:
+                # Sparse-aware linear mapping
+                if 'x_mu' in init_weights:
+                    x = SparseDense(num_out, use_bias=False, name='x_mu')(inputs)
+                    # Note: weight init for custom layer handled via set_weights below
+                else:
+                    x = SparseDense(num_out, use_bias=False, name='x_mu')(inputs)
             else:
-                x = Dense(num_out, use_bias=False, name='x_mu')(inputs)
+                if 'x_mu' in init_weights:
+                    x = Dense(num_out, use_bias=False, name='x_mu', weights=[init_weights['x_mu']])(inputs)
+                else:
+                    x = Dense(num_out, use_bias=False, name='x_mu')(inputs)
             if num_feat_c>0:
                 if 'z_mu' in init_weights:
                     x_c = Dense(1, use_bias=False, name='z_mu', weights=[init_weights['z_mu']])(inputs_c)
@@ -336,6 +443,13 @@ class TensorZINB:
                 outputs=[output],
             )
 
+            if use_sparse_nb and 'x_mu' in init_weights:
+                # Set weights for SparseDense to mirror Dense init behavior
+                for layer in model.layers:
+                    if layer.name == 'x_mu' and isinstance(layer, SparseDense):
+                        layer.set_weights([init_weights['x_mu']])
+                        break
+
             opt = RMSprop(learning_rate=learning_rate)
             model.compile(loss=zinb.loss, optimizer=opt)
 
@@ -364,6 +478,17 @@ class TensorZINB:
                 get_weights = PredictionCallback()
                 callbacks.append(get_weights)
 
+            # Prepare feed arrays to match input kinds/dtypes
+            if use_sparse_nb:
+                exog_nb = _to_tf_sparse(self.exog)
+            else:
+                exog_nb = np.asarray(self.exog, dtype=np.float32)
+            exog_c_feed      = np.asarray(self.exog_c, dtype=np.float32)
+            exog_infl_feed   = np.asarray(self.exog_infl, dtype=np.float32)
+            exog_infl_c_feed = np.asarray(self.exog_infl_c, dtype=np.float32)
+            theta_feed       = np.ones((num_sample, 1), dtype=np.float32)
+            endog_feed       = np.asarray(self.endog, dtype=np.float32)
+
             # TODO: FIX this. code randomly crashes on apple silicon M1/M2 with 
             # error `Incompatible shapes`. code usually runs fine after second try.
             # similar to this issue https://developer.apple.com/forums/thread/701985
@@ -372,13 +497,13 @@ class TensorZINB:
                     start_time = time.time()
                     losses = model.fit(
                         [
-                            self.exog,
-                            self.exog_c,
-                            self.exog_infl,
-                            self.exog_infl_c,
-                            np.ones((num_sample, 1)),
+                            exog_nb,
+                            exog_c_feed,
+                            exog_infl_feed,
+                            exog_infl_c_feed,
+                            theta_feed,
                         ],
-                        [self.endog],
+                        [endog_feed],
                         callbacks=callbacks,
                         batch_size=num_sample,
                         epochs=epochs,
@@ -398,12 +523,12 @@ class TensorZINB:
             )
             llft = get_llfs(
                 [
-                    self.exog,
-                    self.exog_c,
-                    self.exog_infl,
-                    self.exog_infl_c,
-                    np.ones((num_sample, 1)),
-                    self.endog,
+                    exog_nb,
+                    exog_c_feed,
+                    exog_infl_feed,
+                    exog_infl_c_feed,
+                    theta_feed,
+                    endog_feed,
                 ]
             )[0]
 
