@@ -8,7 +8,7 @@ with open('README.md') as f:
     readme = f.read()
 
 import sys
-tensorflow = 'tensorflow_macos==2.15.0' if sys.platform == 'darwin' else 'tensorflow==2.15.0'
+tensorflow = 'tensorflow_macos==2.16.1' if sys.platform == 'darwin' else 'tensorflow==2.16.1'
 
 setup(
     name='tensorzinb',
@@ -23,8 +23,8 @@ setup(
     packages=['tensorzinb'],
     include_package_data=True,
     install_requires=[
-        'keras==2.15.0',
-        'numpy>=1.26,<2',
+        'keras>=3.2,<3.5',
+        'numpy>=1.26.4,<2',
         'pandas',
         'patsy',
         'scikit_learn',
@@ -39,9 +39,9 @@ setup(
         'License :: OSI Approved :: Apache Software License',
         'Operating System :: OS Independent',
         'Programming Language :: Python :: 3',
-        'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
     ],
-    python_requires='>=3.9,<3.12'
+    python_requires='>=3.10,<3.13'
 )

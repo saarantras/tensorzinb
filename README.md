@@ -24,15 +24,15 @@ where $\mu_g$ is the mean of subject $g$, $X_{\mu}$, $Z_{\mu}$, $X_{\pi}$ and $Z
 
 ## Installation
 
+TensorZINB now targets modern TensorFlow wheels that run on NVIDIA H200 GPUs (CUDA 12.3+) and Apple Silicon. Use Python 3.10–3.12.
+
 After downloading this repo, `cd` to the directory of downloaded repo and run:
 
-`python setup.py install`
+```
+python -m pip install .
+```
 
-or 
-
-`pip install .`
-
-For Apple silicon (M1, M2 and etc), it is recommended to install TensorFlow by following the command in Troubleshooting Section below.
+This will install TensorFlow 2.16.1 (or `tensorflow-macos` 2.16.1 on Apple Silicon) and `keras>=3.2`. On Linux with NVIDIA GPUs such as the H200, the official TensorFlow wheels already ship with the matching CUDA and cuDNN libraries—ensure your driver meets the CUDA 12.3 minimum.
 
 ## Model Estimation
 
@@ -165,13 +165,13 @@ More tests can be found in https://github.com/wanglab-georgetown/countmodels/blo
 ## Troubleshooting
 
 ### Run on Apple silicon
-To run tensorflow on Apple silicon (M1, M2, etc), install TensorFlow using the following:
+To run TensorFlow 2.16.1 on Apple silicon (M1, M2, etc), install dependencies using the following:
 
 `conda install -c apple tensorflow-deps`
 
-`python -m pip install tensorflow-macos==2.9.2`
+`python -m pip install tensorflow-macos==2.16.1`
 
-`python -m pip install tensorflow-metal==0.5.1`
+`python -m pip install tensorflow-metal`
 
 ### Feature normalization
 
