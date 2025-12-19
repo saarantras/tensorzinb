@@ -14,9 +14,9 @@ from scipy.special import gammaln
 import statsmodels.api as sm
 
 
-from tensorflow.python.keras.backend import clear_session
-from tensorflow.python.keras.backend import get_session
-from tensorflow.python.framework.ops import disable_eager_execution
+from tensorflow.keras.backend import clear_session
+from tensorflow.compat.v1.keras.backend import get_session
+from tensorflow.compat.v1 import disable_eager_execution
 
 
 def import_tensorflow():
