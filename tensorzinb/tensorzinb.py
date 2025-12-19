@@ -15,8 +15,9 @@ from keras.models import Model
 from keras.layers import Lambda, Input, Dense, RepeatVector, Reshape, Add
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.optimizers import RMSprop
+from keras.initializers import Constant
 from keras import backend as K
-from scipy.special import gammaln
+from scipy.special import gammaln, logsumexp
 import statsmodels.api as sm
 
 
@@ -294,12 +295,26 @@ class TensorZINB:
             inputs_theta = Input(shape=(1,))
 
             if 'x_mu' in init_weights:
-                x = Dense(num_out, use_bias=False, name='x_mu', weights=[init_weights['x_mu']])(inputs)
+                x_mu_initializer = Constant(init_weights['x_mu'])
+                x_layer = Dense(
+                    num_out,
+                    use_bias=False,
+                    name='x_mu',
+                    kernel_initializer=x_mu_initializer,
+                )
+                x = x_layer(inputs)
             else:
                 x = Dense(num_out, use_bias=False, name='x_mu')(inputs)
             if num_feat_c>0:
                 if 'z_mu' in init_weights:
-                    x_c = Dense(1, use_bias=False, name='z_mu', weights=[init_weights['z_mu']])(inputs_c)
+                    z_mu_initializer = Constant(init_weights['z_mu'])
+                    z_mu_layer = Dense(
+                        1,
+                        use_bias=False,
+                        name='z_mu',
+                        kernel_initializer=z_mu_initializer,
+                    )
+                    x_c = z_mu_layer(inputs_c)
                 else:
                     x_c = Dense(1, use_bias=False, name='z_mu')(inputs_c)
                 predictions = Add()([x,x_c])
@@ -310,13 +325,27 @@ class TensorZINB:
                 pi = None
             else:
                 if 'x_pi' in init_weights:
-                    x_infl = Dense(num_out, use_bias=False, name='x_pi', weights=[init_weights['x_pi']])(inputs_infl)
+                    x_pi_initializer = Constant(init_weights['x_pi'])
+                    x_pi_layer = Dense(
+                        num_out,
+                        use_bias=False,
+                        name='x_pi',
+                        kernel_initializer=x_pi_initializer,
+                    )
+                    x_infl = x_pi_layer(inputs_infl)
                 else:
                     x_infl = Dense(num_out, use_bias=False, name='x_pi')(inputs_infl)
 
                 if num_feat_infl_c>0:
                     if 'z_pi' in init_weights:
-                        x_infl_c = Dense(1, use_bias=False, name='z_pi', weights=[init_weights['z_pi']])(inputs_infl_c)
+                        z_pi_initializer = Constant(init_weights['z_pi'])
+                        z_pi_layer = Dense(
+                            1,
+                            use_bias=False,
+                            name='z_pi',
+                            kernel_initializer=z_pi_initializer,
+                        )
+                        x_infl_c = z_pi_layer(inputs_infl_c)
                     else:
                         x_infl_c = Dense(1, use_bias=False, name='z_pi')(inputs_infl_c)
                     pi = Add()([x_infl, x_infl_c])
@@ -324,7 +353,14 @@ class TensorZINB:
                     pi = x_infl
 
             if 'theta' in init_weights:
-                theta0 = Dense(num_dispersion, use_bias=False, name='theta', weights=[init_weights['theta']])(inputs_theta)
+                theta_initializer = Constant(init_weights['theta'])
+                theta_layer = Dense(
+                    num_dispersion,
+                    use_bias=False,
+                    name='theta',
+                    kernel_initializer=theta_initializer,
+                )
+                theta0 = theta_layer(inputs_theta)
             else:
                 theta0 = Dense(num_dispersion, use_bias=False, name='theta')(inputs_theta)
             if self.same_dispersion:
@@ -400,20 +436,44 @@ class TensorZINB:
                     continue
 
             # retrieve LL
-            get_llfs = K.function(
-                [inputs, inputs_c, inputs_infl, inputs_infl_c, inputs_theta, zinb.y],
-                [zinb.llf],
-            )
-            llft = get_llfs(
-                [
-                    self.exog,
-                    self.exog_c,
-                    self.exog_infl,
-                    self.exog_infl_c,
-                    np.ones((num_sample, 1)),
-                    self.endog,
-                ]
-            )[0]
+            log_theta = weights_dict["theta"].reshape(-1)
+            if self.same_dispersion:
+                log_theta = np.full((num_out,), log_theta.mean())
+            theta = np.exp(log_theta).reshape((1, -1))
+
+            log_mu = np.dot(self.exog, weights_dict["x_mu"])
+            if "z_mu" in weights_dict:
+                log_mu = log_mu + np.dot(self.exog_c, weights_dict["z_mu"])
+
+            if self.nb_only:
+                pi = None
+            else:
+                pi = np.dot(self.exog_infl, weights_dict["x_pi"])
+                if "z_pi" in weights_dict:
+                    pi = pi + np.dot(self.exog_infl_c, weights_dict["z_pi"])
+
+            y = self.endog.astype(np.float32)
+            mu = log_mu.astype(np.float32)
+            log_theta_b = log_theta.reshape((1, -1)).astype(np.float32)
+
+            t1 = gammaln(y + theta)
+            t2 = -gammaln(theta)
+            t3 = theta * log_theta_b
+            t4 = y * mu
+            ty = logsumexp(np.stack([log_theta_b, mu], axis=0), axis=0)
+            t5 = -(theta + y) * ty
+
+            if self.nb_only:
+                result = -(t1 + t2 + t3 + t4 + t5)
+            else:
+                log_q0 = -np.logaddexp(0, -pi)
+                log_q1 = log_q0 - pi
+                nb_case = -(t1 + t2 + t3 + t4 + t5 + log_q1)
+                p1 = theta * (log_theta_b - ty) + log_q1
+                zero_case = -np.logaddexp(log_q0, p1)
+                result = np.where(y < zinb.zero_threshold, zero_case, nb_case)
+
+            llft = np.mean(result, axis=0)
 
             llfs = -(llft * num_sample + np.sum(gammaln(self.endog + 1), axis=0))
             aics = -2 * (llfs - self.df_model_each)
