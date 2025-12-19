@@ -1,22 +1,11 @@
 import warnings
 import time
 
-# import tensorflow as tf
 import contextlib
 import os
 import numpy as np
-from keras.models import Model
-from keras.layers import Lambda, Input, Dense, RepeatVector, Reshape, Add
-from keras.callbacks import EarlyStopping, ReduceLROnPlateau
-from keras.optimizers import RMSprop
-from keras import backend as K
 from scipy.special import gammaln
 import statsmodels.api as sm
-
-
-from tensorflow.python.keras.backend import clear_session
-from tensorflow.python.keras.backend import get_session
-from tensorflow.python.framework.ops import disable_eager_execution
 
 
 def import_tensorflow():
@@ -41,6 +30,15 @@ def import_tensorflow():
 
 
 tf = import_tensorflow()
+
+from tensorflow.keras import backend as K
+from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau
+from tensorflow.keras.layers import Lambda, Input, Dense, RepeatVector, Reshape, Add
+from tensorflow.keras.models import Model
+from tensorflow.keras.optimizers import RMSprop
+from tensorflow.keras.backend import clear_session
+from tensorflow.compat.v1.keras.backend import get_session
+from tensorflow.compat.v1 import disable_eager_execution
 
 # Reset Keras Session
 def reset_keras():

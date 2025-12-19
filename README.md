@@ -24,13 +24,27 @@ where $\mu_g$ is the mean of subject $g$, $X_{\mu}$, $Z_{\mu}$, $X_{\pi}$ and $Z
 
 ## Installation
 
-After downloading this repo, `cd` to the directory of downloaded repo and run:
+1. Use Python 3.9–3.11 (TensorFlow 2.16.x wheels are built for these versions). A fresh virtual environment is recommended:
 
-`python setup.py install`
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
-or 
+2. Install dependencies. The Linux wheel of TensorFlow 2.16.1 is built against CUDA 12 (suitable for H200 GPUs—ensure NVIDIA drivers/CUDA libraries match), and macOS pulls the metal build automatically:
 
-`pip install .`
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+   For NVIDIA accelerators such as H200, confirm your host has CUDA 12-compatible drivers (e.g., 535+) and matching CUDA/cuDNN runtimes before installing the TensorFlow wheel.
+
+3. Install TensorZINB in editable mode so you can run examples and modify the source:
+
+```bash
+pip install -e .
+```
 
 For Apple silicon (M1, M2 and etc), it is recommended to install TensorFlow by following the command in Troubleshooting Section below.
 
