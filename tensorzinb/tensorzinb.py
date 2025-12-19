@@ -17,7 +17,7 @@ from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.optimizers import RMSprop
 from keras.initializers import Constant
 from keras import backend as K
-from scipy.special import gammaln
+from scipy.special import gammaln, logsumexp
 import statsmodels.api as sm
 
 
@@ -436,20 +436,44 @@ class TensorZINB:
                     continue
 
             # retrieve LL
-            get_llfs = K.function(
-                [inputs, inputs_c, inputs_infl, inputs_infl_c, inputs_theta, zinb.y],
-                [zinb.llf],
-            )
-            llft = get_llfs(
-                [
-                    self.exog,
-                    self.exog_c,
-                    self.exog_infl,
-                    self.exog_infl_c,
-                    np.ones((num_sample, 1)),
-                    self.endog,
-                ]
-            )[0]
+            log_theta = weights_dict["theta"].reshape(-1)
+            if self.same_dispersion:
+                log_theta = np.full((num_out,), log_theta.mean())
+            theta = np.exp(log_theta).reshape((1, -1))
+
+            log_mu = np.dot(self.exog, weights_dict["x_mu"])
+            if "z_mu" in weights_dict:
+                log_mu = log_mu + np.dot(self.exog_c, weights_dict["z_mu"])
+
+            if self.nb_only:
+                pi = None
+            else:
+                pi = np.dot(self.exog_infl, weights_dict["x_pi"])
+                if "z_pi" in weights_dict:
+                    pi = pi + np.dot(self.exog_infl_c, weights_dict["z_pi"])
+
+            y = self.endog.astype(np.float32)
+            mu = log_mu.astype(np.float32)
+            log_theta_b = log_theta.reshape((1, -1)).astype(np.float32)
+
+            t1 = gammaln(y + theta)
+            t2 = -gammaln(theta)
+            t3 = theta * log_theta_b
+            t4 = y * mu
+            ty = logsumexp(np.stack([log_theta_b, mu], axis=0), axis=0)
+            t5 = -(theta + y) * ty
+
+            if self.nb_only:
+                result = -(t1 + t2 + t3 + t4 + t5)
+            else:
+                log_q0 = -np.logaddexp(0, -pi)
+                log_q1 = log_q0 - pi
+                nb_case = -(t1 + t2 + t3 + t4 + t5 + log_q1)
+                p1 = theta * (log_theta_b - ty) + log_q1
+                zero_case = -np.logaddexp(log_q0, p1)
+                result = np.where(y < zinb.zero_threshold, zero_case, nb_case)
+
+            llft = np.mean(result, axis=0)
 
             llfs = -(llft * num_sample + np.sum(gammaln(self.endog + 1), axis=0))
             aics = -2 * (llfs - self.df_model_each)
