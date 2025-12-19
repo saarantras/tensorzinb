@@ -15,6 +15,7 @@ from keras.models import Model
 from keras.layers import Lambda, Input, Dense, RepeatVector, Reshape, Add
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
 from keras.optimizers import RMSprop
+from keras.initializers import Constant
 from keras import backend as K
 from scipy.special import gammaln
 import statsmodels.api as sm
@@ -294,12 +295,26 @@ class TensorZINB:
             inputs_theta = Input(shape=(1,))
 
             if 'x_mu' in init_weights:
-                x = Dense(num_out, use_bias=False, name='x_mu', weights=[init_weights['x_mu']])(inputs)
+                x_mu_initializer = Constant(init_weights['x_mu'])
+                x_layer = Dense(
+                    num_out,
+                    use_bias=False,
+                    name='x_mu',
+                    kernel_initializer=x_mu_initializer,
+                )
+                x = x_layer(inputs)
             else:
                 x = Dense(num_out, use_bias=False, name='x_mu')(inputs)
             if num_feat_c>0:
                 if 'z_mu' in init_weights:
-                    x_c = Dense(1, use_bias=False, name='z_mu', weights=[init_weights['z_mu']])(inputs_c)
+                    z_mu_initializer = Constant(init_weights['z_mu'])
+                    z_mu_layer = Dense(
+                        1,
+                        use_bias=False,
+                        name='z_mu',
+                        kernel_initializer=z_mu_initializer,
+                    )
+                    x_c = z_mu_layer(inputs_c)
                 else:
                     x_c = Dense(1, use_bias=False, name='z_mu')(inputs_c)
                 predictions = Add()([x,x_c])
@@ -310,13 +325,27 @@ class TensorZINB:
                 pi = None
             else:
                 if 'x_pi' in init_weights:
-                    x_infl = Dense(num_out, use_bias=False, name='x_pi', weights=[init_weights['x_pi']])(inputs_infl)
+                    x_pi_initializer = Constant(init_weights['x_pi'])
+                    x_pi_layer = Dense(
+                        num_out,
+                        use_bias=False,
+                        name='x_pi',
+                        kernel_initializer=x_pi_initializer,
+                    )
+                    x_infl = x_pi_layer(inputs_infl)
                 else:
                     x_infl = Dense(num_out, use_bias=False, name='x_pi')(inputs_infl)
 
                 if num_feat_infl_c>0:
                     if 'z_pi' in init_weights:
-                        x_infl_c = Dense(1, use_bias=False, name='z_pi', weights=[init_weights['z_pi']])(inputs_infl_c)
+                        z_pi_initializer = Constant(init_weights['z_pi'])
+                        z_pi_layer = Dense(
+                            1,
+                            use_bias=False,
+                            name='z_pi',
+                            kernel_initializer=z_pi_initializer,
+                        )
+                        x_infl_c = z_pi_layer(inputs_infl_c)
                     else:
                         x_infl_c = Dense(1, use_bias=False, name='z_pi')(inputs_infl_c)
                     pi = Add()([x_infl, x_infl_c])
@@ -324,7 +353,14 @@ class TensorZINB:
                     pi = x_infl
 
             if 'theta' in init_weights:
-                theta0 = Dense(num_dispersion, use_bias=False, name='theta', weights=[init_weights['theta']])(inputs_theta)
+                theta_initializer = Constant(init_weights['theta'])
+                theta_layer = Dense(
+                    num_dispersion,
+                    use_bias=False,
+                    name='theta',
+                    kernel_initializer=theta_initializer,
+                )
+                theta0 = theta_layer(inputs_theta)
             else:
                 theta0 = Dense(num_dispersion, use_bias=False, name='theta')(inputs_theta)
             if self.same_dispersion:
