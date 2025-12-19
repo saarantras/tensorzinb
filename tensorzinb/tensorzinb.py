@@ -3,6 +3,7 @@ import time
 
 # import tensorflow as tf
 import contextlib
+import gc
 import os
 import numpy as np
 from keras.models import Model
@@ -15,8 +16,6 @@ import statsmodels.api as sm
 
 
 from tensorflow.keras.backend import clear_session
-from tensorflow.compat.v1.keras.backend import get_session
-from tensorflow.compat.v1 import disable_eager_execution
 
 
 def import_tensorflow():
@@ -44,9 +43,15 @@ tf = import_tensorflow()
 
 # Reset Keras Session
 def reset_keras():
-    sess = get_session()
-    clear_session()
-    sess.close()
+    with contextlib.suppress(Exception):
+        clear_session()
+
+    with contextlib.suppress(Exception):
+        for device in tf.config.list_physical_devices():
+            if hasattr(tf.config.experimental, "reset_memory_stats"):
+                tf.config.experimental.reset_memory_stats(device)
+
+    gc.collect()
 
 
 class ZINBLogLik:
@@ -277,8 +282,6 @@ class TensorZINB:
                 K.clear_session()
 
         with tf.device(device_name):
-            disable_eager_execution()
-
             inputs = Input(shape=(num_feat,))
             inputs_infl = Input(shape=(num_feat_infl,))
             inputs_c = Input(shape=(num_feat_c,))
