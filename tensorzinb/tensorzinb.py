@@ -6,6 +6,11 @@ import contextlib
 import gc
 import os
 import numpy as np
+
+# Compatibility shim for NumPy 2.0 where ``np.complex_`` was removed
+if not hasattr(np, "complex_"):
+    np.complex_ = np.complex128  # type: ignore[attr-defined]
+
 from keras.models import Model
 from keras.layers import Lambda, Input, Dense, RepeatVector, Reshape, Add
 from keras.callbacks import EarlyStopping, ReduceLROnPlateau
